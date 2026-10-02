@@ -1,5 +1,3 @@
-# src/model/model_building.py
-
 import numpy as np
 import pandas as pd
 import os

@@ -1,3 +1,4 @@
+import mlflow.lightgbm
 import numpy as np
 import pandas as pd
 import pickle
@@ -5,7 +6,6 @@ import logging
 import yaml
 import mlflow
 import mlflow.sklearn
-import mlflow.lightgbm
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 import os
@@ -110,18 +110,34 @@ def log_confusion_matrix(cm, dataset_name):
     mlflow.log_artifact(cm_file_path)
     plt.close()
 
+def save_model_info(run_id: str, model_path: str, file_path: str) -> None:
+    """Save the model run ID and path to a JSON file."""
+    try:
+        # Create a dictionary with the info you want to save
+        model_info = {
+            'run_id': run_id,
+            'model_path': model_path
+        }
+        # Save the dictionary as a JSON file
+        with open(file_path, 'w') as file:
+            json.dump(model_info, file, indent=4)
+        logger.debug('Model info saved to %s', file_path)
+    except Exception as e:
+        logger.error('Error occurred while saving the model info: %s', e)
+        raise
+
 
 def main():
     mlflow.set_tracking_uri("http://ec2-51-20-51-194.eu-north-1.compute.amazonaws.com:5000/")
 
     mlflow.set_experiment('dvc-pipeline')
     
-    with mlflow.start_run():
+    with mlflow.start_run() as run:
         try:
             # Load parameters from YAML file
             root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
             params = load_params(os.path.join(root_dir, 'params.yaml'))
-            
+
             # Log parameters
             for key, value in params.items():
                 mlflow.log_param(key, value)
@@ -130,21 +146,33 @@ def main():
             model = load_model(os.path.join(root_dir, 'lgbm_model.pkl'))
             vectorizer = load_vectorizer(os.path.join(root_dir, 'tfidf_vectorizer.pkl'))
 
-            # Log model paramter
-            if hasattr(model, 'get_params'):
-                for param_name, param_value in model.get_params().items():
-                    mlflow.log_param(param_name, param_value)
-
-            # Log model and vectorizer
-            mlflow.lightgbm.log_model(model, "lgbm_model")
-            mlflow.log_artifact(os.path.join(root_dir, "tfidf_vectorizer.pkl"))
-
-            # Load test data 
+            # Load test data for signature inference
             test_data = load_data(os.path.join(root_dir, 'data/interim/test_processed.csv'))
 
             # Prepare test data
             X_test_tfidf = vectorizer.transform(test_data['clean_comment'].values)
             y_test = test_data['category'].values
+
+            # Create a DataFrame for signature inference (using first few rows as an example)
+            input_example = pd.DataFrame(X_test_tfidf.toarray()[:5], columns=vectorizer.get_feature_names_out())  # <--- Added for signature
+
+            # Infer the signature
+            signature = infer_signature(input_example, model.predict(X_test_tfidf[:5]))  # <--- Added for signature
+
+            # Log model with signature
+            mlflow.lightgbm.log_model(
+                model,
+                "lgbm_model",
+                signature=signature,  # <--- Added for signature
+                input_example=input_example  # <--- Added input example
+            )
+
+            # Save model info
+            model_path = "lgbm_model"
+            save_model_info(run.info.run_id, model_path, 'experiment_info.json')
+
+            # Log the vectorizer as an artifact
+            mlflow.log_artifact(os.path.join(root_dir, 'tfidf_vectorizer.pkl'))
 
             # Evaluate model and get metrics
             report, cm = evaluate_model(model, X_test_tfidf, y_test)
