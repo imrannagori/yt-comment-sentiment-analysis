@@ -72,7 +72,7 @@ def home():
 def predict_with_timestamps():
     data = request.json
     comments_data = data.get('comments')
-    
+
     if not comments_data:
         return jsonify({"error": "No comments provided"}), 400
 
@@ -80,29 +80,61 @@ def predict_with_timestamps():
         comments = [item['text'] for item in comments_data]
         timestamps = [item['timestamp'] for item in comments_data]
 
-        # Preprocess each comment before vectorizing
-        preprocessed_comments = [preprocess_comment(comment) for comment in comments]
-        
-        # Transform comments using the vectorizer
-        transformed_comments = vectorizer.transform(preprocessed_comments)
-        
-        # Make predictions
+        # Preprocess comments
+        preprocessed_comments = [
+            preprocess_comment(comment)
+            for comment in comments
+        ]
+
+        # TF-IDF transformation
+        transformed_comments = vectorizer.transform(
+            preprocessed_comments
+        )
+
+        # Convert TF-IDF output to DataFrame
         input_df = pd.DataFrame(
             transformed_comments.toarray(),
-        columns = vectorizer.get_feature_names_out()
+            columns=vectorizer.get_feature_names_out()
         )
+
+        # Get exact columns expected by MLflow production model
+        expected_columns = [
+            x.name
+            for x in model.metadata.get_input_schema().inputs
+        ]
+
+        # Match input exactly with model schema
+        input_df = input_df.reindex(
+            columns=expected_columns,
+            fill_value=0
+        )
+
+        # Prediction
         predictions = model.predict(input_df).tolist()
-        
-        # Convert predictions to strings for consistency
+
         predictions = [str(pred) for pred in predictions]
+
+        response = [
+            {
+                "comment": comment,
+                "sentiment": sentiment,
+                "timestamp": timestamp
+            }
+            for comment, sentiment, timestamp
+            in zip(comments, predictions, timestamps)
+        ]
+
+        return jsonify(response)
+
     except Exception as e:
         print("========== PREDICTION ERROR ==========")
         print(repr(e))
-        
+
         import traceback
         traceback.print_exc()
-        
+
         print("======================================")
+
         return jsonify({
             "error": f"Prediction failed: {str(e)}"
         }), 500
