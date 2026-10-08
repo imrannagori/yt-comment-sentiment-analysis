@@ -116,7 +116,11 @@ jobs:
       - name: Show Flask logs
         if: always()
         run: |
-          cat flask.log
+          if [ -f flask.log ]; then
+            cat flask.log
+          else
+            echo "flask.log not found, continuing..."
+          fi
 
       - name: Login to AWS ECR
         if: success()
